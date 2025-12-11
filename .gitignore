@@ -1,0 +1,4 @@
+node_modules
+readings.jsonl
+uptime_stats.jsonl
+.env
