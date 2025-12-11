@@ -7,7 +7,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const LOG_FILE = path.join(__dirname, "readings.jsonl");
 const STATS_LOG = path.join(__dirname, "uptime_stats.jsonl");
-const RETENTION_DAYS = Number(process.env.RETENTION_DAYS) || 7;
+const RETENTION_DAYS = (() => {
+  const parsed = Number(process.env.RETENTION_DAYS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
+})();
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const SERIAL_PORT = process.env.SERIAL_PORT || "COM3";
 const SERIAL_BAUD = Number(process.env.SERIAL_BAUD) || 115200;
@@ -193,6 +196,7 @@ const loadStatsFromReadings = async () => {
 };
 
 const initialize = async () => {
+  console.log(`Log retention set to ${RETENTION_DAYS} day(s).`);
   await pruneOldReadings();
   await pruneOldStatsLog();
   await loadStatsFromReadings();
