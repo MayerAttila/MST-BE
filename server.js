@@ -28,14 +28,21 @@ const resetStats = () => ({
   last_timestamp: null,
 });
 
-const appendStatsSnapshot = async () => {
-  const snapshot = {
+const appendStatsSegment = async ({
+  status,
+  start_at,
+  end_at,
+  duration_ms,
+}) => {
+  const entry = {
     snapshot_at: new Date().toISOString(),
-    ...stats,
-    total_online_hms: formatMs(stats.total_online_ms),
-    total_offline_hms: formatMs(stats.total_offline_ms),
+    status,
+    start_at,
+    end_at,
+    duration_ms,
+    duration_hms: formatMs(duration_ms),
   };
-  await fs.appendFile(STATS_LOG, JSON.stringify(snapshot) + "\n", "utf8");
+  await fs.appendFile(STATS_LOG, JSON.stringify(entry) + "\n", "utf8");
 };
 
 const computeOnline = (reading) => {
@@ -151,47 +158,50 @@ const pruneOldReadings = async () => {
   if (kept.length === 0) {
     await fs.writeFile(LOG_FILE, "", "utf8");
     stats = resetStats();
-    await appendStatsSnapshot();
     return;
   }
 
   const payload = kept.map((obj) => JSON.stringify(obj)).join("\n") + "\n";
   await fs.writeFile(LOG_FILE, payload, "utf8");
   stats = recomputeStats(kept);
-  await appendStatsSnapshot();
 };
 
-const loadLastStatsSnapshot = async () => {
+const loadStatsFromReadings = async () => {
+  let lines;
   try {
-    const raw = await fs.readFile(STATS_LOG, "utf8");
-    const lines = raw.split("\n").filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      try {
-        const parsed = JSON.parse(lines[i]);
-        stats = {
-          total_online_ms: parsed.total_online_ms ?? 0,
-          total_offline_ms: parsed.total_offline_ms ?? 0,
-          last_status: parsed.last_status ?? null,
-          last_timestamp: parsed.last_timestamp ?? null,
-        };
-        return;
-      } catch {
-        // skip malformed line
-      }
-    }
+    const raw = await fs.readFile(LOG_FILE, "utf8");
+    lines = raw.split("\n").filter(Boolean);
   } catch {
-    // no log yet
+    lines = [];
   }
+
+  const readings = [];
+  for (const line of lines) {
+    try {
+      readings.push(JSON.parse(line));
+    } catch {
+      // skip malformed
+    }
+  }
+
+  if (readings.length === 0) {
+    stats = resetStats();
+    return;
+  }
+
+  stats = recomputeStats(readings);
 };
 
 const initialize = async () => {
   await pruneOldReadings();
   await pruneOldStatsLog();
-  await loadLastStatsSnapshot();
+  await loadStatsFromReadings();
   // prune daily
   setInterval(() => {
     pruneOldReadings().catch((err) => console.error("Prune failed:", err));
-    pruneOldStatsLog().catch((err) => console.error("Prune stats failed:", err));
+    pruneOldStatsLog().catch((err) =>
+      console.error("Prune stats failed:", err)
+    );
   }, 24 * 60 * 60 * 1000);
 };
 
@@ -213,11 +223,20 @@ const appendReading = async (reading) => {
     } else {
       stats.total_offline_ms += delta;
     }
+
+    // On status change, log the duration of the previous state
+    if (online !== stats.last_status && delta > 0) {
+      await appendStatsSegment({
+        status: stats.last_status ? "online" : "offline",
+        start_at: stats.last_timestamp,
+        end_at: stamped.timestamp,
+        duration_ms: delta,
+      });
+    }
   }
 
   stats.last_status = online;
   stats.last_timestamp = stamped.timestamp;
-  await appendStatsSnapshot();
 
   return stamped;
 };
